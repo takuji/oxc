@@ -3,8 +3,9 @@ use lazy_regex::{Regex, RegexBuilder, regex};
 use oxc_ast::{
     AstKind,
     ast::{
-        ArrowFunctionExpression, Expression, JSXAttributeName, JSXAttributeValue, JSXElementName,
-        JSXExpression, JSXMemberExpression, JSXMemberExpressionObject, Statement,
+        ArrowFunctionExpression, Expression, IdentifierReference, JSXAttributeName,
+        JSXAttributeValue, JSXElementName, JSXExpression, JSXMemberExpression,
+        JSXMemberExpressionObject, Statement, StaticMemberExpression,
     },
 };
 use oxc_diagnostics::OxcDiagnostic;
@@ -16,6 +17,19 @@ fn bad_handler_name_diagnostic(span: Span, prop_key: &str, handler_prefix: &str)
     OxcDiagnostic::warn("Bad handler name")
         .with_help(format!(
             "Handler function for {prop_key} prop key must be a camelCase name beginning with \'{handler_prefix}\' only"
+        ))
+        .with_label(span)
+}
+
+fn bad_props_handler_name_diagnostic(
+    span: Span,
+    prop_key: &str,
+    handler_prefix: &str,
+    handler_prop_prefix: &str,
+) -> OxcDiagnostic {
+    OxcDiagnostic::warn("Bad handler name")
+        .with_help(format!(
+            "Handler function for {prop_key} prop key must be a camelCase name beginning with \'{handler_prefix}\' or '{handler_prop_prefix}'"
         ))
         .with_label(span)
 }
@@ -125,12 +139,9 @@ fn build_event_handler_regex(handler_prefix: &str, handler_prop_prefix: &str) ->
     if prefix_pattern.is_empty() || prop_prefix_pattern.is_empty() {
         return None;
     }
-    let regex = RegexBuilder::new(
-        format!(r"^((props\.({prop_prefix_pattern}))|((.*\.)?({prefix_pattern})))[0-9]*[A-Z].*$")
-            .as_str(),
-    )
-    .build()
-    .expect("Failed to compile regex for event handler prefixes");
+    let regex = RegexBuilder::new(format!(r"^({prefix_pattern})[0-9]*[A-Z].*$").as_str())
+        .build()
+        .expect("Failed to compile regex for event handler prefixes");
     Some(regex)
 }
 
@@ -144,7 +155,7 @@ fn build_event_handler_prop_regex(handler_prop_prefix: &str) -> Option<Regex> {
     if prop_prefix_pattern.is_empty() {
         return None;
     }
-    let regex = RegexBuilder::new(format!(r"^(({prop_prefix_pattern})[A-Z].*|ref)$").as_str())
+    let regex = RegexBuilder::new(format!(r"^({prop_prefix_pattern})[A-Z].*$").as_str())
         .build()
         .expect("Failed to compile regex for event handler prop prefixes");
     Some(regex)
@@ -261,25 +272,41 @@ impl Rule for JsxHandlerNames {
         };
         let value_expr = &expression_container.expression;
 
-        let (prop_value, prop_value_span) =
-            if let JSXExpression::ArrowFunctionExpression(arrow_function) = value_expr {
+        let (handler_name, handler_span, is_props_handler) = match value_expr {
+            JSXExpression::ArrowFunctionExpression(arrow_function) => {
                 if !self.check_inline_functions {
                     return;
                 }
                 if !self.check_local_variables && !is_member_expression_callee(arrow_function) {
                     return;
                 }
-                match extract_callee_name_from_arrow_function(arrow_function) {
-                    Some((name, span)) => (Some(normalize_handler_name(name)), span),
-                    None => (None, arrow_function.body.span),
+                if let Some((name, span, is_props_handler)) =
+                    get_event_handler_name_from_arrow_function(arrow_function, ctx)
+                {
+                    (Some(name), span, is_props_handler)
+                } else {
+                    (None, arrow_function.body.span, false)
                 }
-            } else {
+            }
+            JSXExpression::Identifier(ident) => {
+                if !self.check_local_variables {
+                    return;
+                }
+                (Some(ident.name.as_str().into()), ident.span, false)
+            }
+            JSXExpression::StaticMemberExpression(member_expr) => {
+                let (name, span, is_props_handler) =
+                    get_event_handler_name_from_static_member_expression(member_expr, ctx);
+                (Some(name), span, is_props_handler)
+            }
+            _ => {
                 if !self.check_local_variables && !value_expr.is_member_expression() {
                     return;
                 }
                 let span = expression_container.span.shrink(1);
-                (Some(normalize_handler_name(ctx.source_range(span))), span)
-            };
+                (Some(normalize_handler_name(ctx.source_range(span))), span, false)
+            }
+        };
 
         let (prop_key, prop_span) = match &jsx_attribute.name {
             JSXAttributeName::Identifier(ident) => (ident.name.as_str(), ident.span),
@@ -291,19 +318,32 @@ impl Rule for JsxHandlerNames {
             return;
         }
 
-        let prop_is_event_handler =
-            self.event_handler_prop_regex.as_ref().map(|r| r.is_match(prop_key));
-        let is_handler_name_correct = prop_value.as_ref().map_or(Some(false), |name| {
-            self.event_handler_regex.as_ref().map(|r| r.is_match(name))
+        let prop_is_event_handler = self.match_event_handler_props_name(prop_key);
+        let is_handler_name_correct = handler_name.as_ref().map_or(Some(false), |name| {
+            if is_props_handler {
+                if self.match_event_handler_props_name(name).unwrap_or(false) {
+                    return Some(true);
+                }
+            }
+            self.match_event_handler_name(name)
         });
 
-        match (prop_is_event_handler, is_handler_name_correct, prop_value) {
+        match (prop_is_event_handler, is_handler_name_correct, handler_name) {
             (Some(true), Some(false), _) => {
-                ctx.diagnostic(bad_handler_name_diagnostic(
-                    prop_value_span,
-                    prop_key,
-                    &self.event_handler_prefixes,
-                ));
+                if is_props_handler {
+                    ctx.diagnostic(bad_props_handler_name_diagnostic(
+                        handler_span,
+                        prop_key,
+                        &self.event_handler_prefixes,
+                        &self.event_handler_prop_prefixes,
+                    ));
+                } else {
+                    ctx.diagnostic(bad_handler_name_diagnostic(
+                        handler_span,
+                        prop_key,
+                        &self.event_handler_prefixes,
+                    ));
+                }
             }
             (Some(false), Some(true), Some(value)) => {
                 ctx.diagnostic(bad_handler_prop_name_diagnostic(
@@ -319,6 +359,16 @@ impl Rule for JsxHandlerNames {
     }
 }
 
+impl JsxHandlerNames {
+    fn match_event_handler_props_name(&self, name: &str) -> Option<bool> {
+        self.event_handler_prop_regex.as_ref().map(|r| r.is_match(name))
+    }
+
+    fn match_event_handler_name(&self, name: &str) -> Option<bool> {
+        self.event_handler_regex.as_ref().map(|r| r.is_match(name))
+    }
+}
+
 /// true if the expression is like "() => this.onFoo(...)" or "() => this.props.onFoo(...)"
 fn is_member_expression_callee(arrow_function: &ArrowFunctionExpression<'_>) -> bool {
     let Some(Statement::ExpressionStatement(stmt)) = arrow_function.body.statements.first() else {
@@ -330,11 +380,34 @@ fn is_member_expression_callee(arrow_function: &ArrowFunctionExpression<'_>) -> 
     callee_expr.callee.is_member_expression()
 }
 
+fn get_event_handler_name_from_static_member_expression(
+    member_expr: &StaticMemberExpression,
+    ctx: &LintContext,
+) -> (CompactStr, Span, bool) {
+    let name = member_expr.property.name.as_str();
+    let span = member_expr.property.span;
+    match &member_expr.object {
+        Expression::ThisExpression(_) => (name.into(), span, false),
+        Expression::Identifier(ident) => {
+            let obj_name = ident.name.as_str();
+            (name.into(), span, obj_name == "props")
+        }
+        Expression::StaticMemberExpression(expr) => {
+            let (obj_name, _obj_span, is_props) =
+                get_event_handler_name_from_static_member_expression(expr, ctx);
+            (name.into(), span, !is_props && obj_name == "props")
+        }
+        _ => (ctx.source_range(member_expr.span).into(), member_expr.span, false),
+    }
+}
+
 fn get_element_name(name: &JSXElementName<'_>) -> CompactStr {
     match name {
         JSXElementName::Identifier(ident) => ident.name.as_str().into(),
         JSXElementName::IdentifierReference(ident) => ident.name.as_str().into(),
-        JSXElementName::MemberExpression(member_expr) => get_member_expression_name(member_expr),
+        JSXElementName::MemberExpression(member_expr) => {
+            get_element_name_of_member_expression(member_expr)
+        }
         JSXElementName::NamespacedName(namespaced_name) => format!(
             "{}:{}",
             namespaced_name.namespace.name.as_str(),
@@ -345,13 +418,13 @@ fn get_element_name(name: &JSXElementName<'_>) -> CompactStr {
     }
 }
 
-fn get_member_expression_name(member_expr: &JSXMemberExpression) -> CompactStr {
+fn get_element_name_of_member_expression(member_expr: &JSXMemberExpression) -> CompactStr {
     match &member_expr.object {
         JSXMemberExpressionObject::IdentifierReference(ident) => ident.name.as_str().into(),
         JSXMemberExpressionObject::ThisExpression(_) => "this".into(),
         JSXMemberExpressionObject::MemberExpression(next_expr) => format!(
             "{}.{}",
-            get_member_expression_name(next_expr),
+            get_element_name_of_member_expression(next_expr),
             member_expr.property.name.as_str()
         )
         .into(),
@@ -383,9 +456,10 @@ fn test_normalize_handler_name() {
     assert_eq!(normalize_handler_name("props::handleChange"), "handleChange");
 }
 
-fn extract_callee_name_from_arrow_function<'a>(
+fn get_event_handler_name_from_arrow_function<'a>(
     arrow_function: &'a ArrowFunctionExpression<'a>,
-) -> Option<(&'a str, Span)> {
+    ctx: &LintContext<'a>,
+) -> Option<(CompactStr, Span, bool)> {
     if !arrow_function.expression {
         return None;
     }
@@ -396,9 +470,9 @@ fn extract_callee_name_from_arrow_function<'a>(
         return None;
     };
     match &call_expr.callee {
-        Expression::Identifier(ident) => Some((ident.name.as_str(), ident.span)),
+        Expression::Identifier(ident) => Some((ident.name.as_str().into(), ident.span, false)),
         Expression::StaticMemberExpression(member_expr) => {
-            Some((member_expr.property.name.as_str(), member_expr.property.span))
+            Some(get_event_handler_name_from_static_member_expression(member_expr, ctx))
         }
         _ => None,
     }
@@ -547,6 +621,7 @@ fn test() {
         ("<TestComponent onChange={this.handle2} />", None),
         ("<TestComponent onChange={this.handl3Change} />", None),
         ("<TestComponent onChange={this.handle4change} />", None),
+        ("<TestComponent onChange={this.props.doSomethingOnChange} />", None),
         (
             "<TestComponent onChange={takeCareOfChange} />",
             Some(serde_json::json!([{ "checkLocalVariables": true }])),

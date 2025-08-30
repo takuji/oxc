@@ -2,46 +2,53 @@
 source: crates/oxc_linter/src/tester.rs
 ---
   ⚠ eslint-plugin-react(jsx-handler-names): Bad handler name
-   ╭─[jsx_handler_names.tsx:1:26]
+   ╭─[jsx_handler_names.tsx:1:31]
  1 │ <TestComponent onChange={this.doSomethingOnChange} />
-   ·                          ────────────────────────
+   ·                               ───────────────────
    ╰────
   help: Handler function for onChange prop key must be a camelCase name beginning with 'handle' only
 
   ⚠ eslint-plugin-react(jsx-handler-names): Bad handler name
-   ╭─[jsx_handler_names.tsx:1:26]
+   ╭─[jsx_handler_names.tsx:1:31]
  1 │ <TestComponent onChange={this.handlerChange} />
-   ·                          ──────────────────
+   ·                               ─────────────
    ╰────
   help: Handler function for onChange prop key must be a camelCase name beginning with 'handle' only
 
   ⚠ eslint-plugin-react(jsx-handler-names): Bad handler name
-   ╭─[jsx_handler_names.tsx:1:26]
+   ╭─[jsx_handler_names.tsx:1:31]
  1 │ <TestComponent onChange={this.handle} />
-   ·                          ───────────
+   ·                               ──────
    ╰────
   help: Handler function for onChange prop key must be a camelCase name beginning with 'handle' only
 
   ⚠ eslint-plugin-react(jsx-handler-names): Bad handler name
-   ╭─[jsx_handler_names.tsx:1:26]
+   ╭─[jsx_handler_names.tsx:1:31]
  1 │ <TestComponent onChange={this.handle2} />
-   ·                          ────────────
+   ·                               ───────
    ╰────
   help: Handler function for onChange prop key must be a camelCase name beginning with 'handle' only
 
   ⚠ eslint-plugin-react(jsx-handler-names): Bad handler name
-   ╭─[jsx_handler_names.tsx:1:26]
+   ╭─[jsx_handler_names.tsx:1:31]
  1 │ <TestComponent onChange={this.handl3Change} />
-   ·                          ─────────────────
+   ·                               ────────────
    ╰────
   help: Handler function for onChange prop key must be a camelCase name beginning with 'handle' only
 
   ⚠ eslint-plugin-react(jsx-handler-names): Bad handler name
-   ╭─[jsx_handler_names.tsx:1:26]
+   ╭─[jsx_handler_names.tsx:1:31]
  1 │ <TestComponent onChange={this.handle4change} />
-   ·                          ──────────────────
+   ·                               ─────────────
    ╰────
   help: Handler function for onChange prop key must be a camelCase name beginning with 'handle' only
+
+  ⚠ eslint-plugin-react(jsx-handler-names): Bad handler name
+   ╭─[jsx_handler_names.tsx:1:37]
+ 1 │ <TestComponent onChange={this.props.doSomethingOnChange} />
+   ·                                     ───────────────────
+   ╰────
+  help: Handler function for onChange prop key must be a camelCase name beginning with 'handle' or 'on'
 
   ⚠ eslint-plugin-react(jsx-handler-names): Bad handler name
    ╭─[jsx_handler_names.tsx:1:26]
@@ -128,9 +135,9 @@ source: crates/oxc_linter/src/tester.rs
   help: Prop key for handleChange must begin with 'when|on'
 
   ⚠ eslint-plugin-react(jsx-handler-names): Bad handler name
-   ╭─[jsx_handler_names.tsx:1:26]
+   ╭─[jsx_handler_names.tsx:1:31]
  1 │ <TestComponent onChange={this.onChange} />
-   ·                          ─────────────
+   ·                               ────────
    ╰────
   help: Handler function for onChange prop key must be a camelCase name beginning with 'handle' only
 
